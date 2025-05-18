@@ -1,0 +1,163 @@
+#include <iostream>
+#include <fstream>
+#include <unordered_map>
+#include <queue>
+#include <vector>
+#include <string>
+#include <bitset>
+#include <sys/stat.h>
+
+using namespace std;
+
+// Node for Huffman Tree
+struct Node {
+    char ch;
+    int freq;
+    Node *left, *right;
+
+    Node(char c, int f) : ch(c), freq(f), left(nullptr), right(nullptr) {}
+};
+
+// Comparator for min-heap
+struct Compare {
+    bool operator()(Node* a, Node* b) {
+        return a->freq > b->freq;
+    }
+};
+
+unordered_map<char, string> huffmanCodes;
+unordered_map<string, char> reverseCodes;
+
+// Get file size in bytes
+long getFileSize(const string& filename) {
+    struct stat stat_buf;
+    stat(filename.c_str(), &stat_buf);
+    return stat_buf.st_size;
+}
+
+// Build Huffman Tree
+Node* buildHuffmanTree(unordered_map<char, int>& freq) {
+    priority_queue<Node*, vector<Node*>, Compare> minHeap;
+
+    for (auto& pair : freq)
+        minHeap.push(new Node(pair.first, pair.second));
+
+    while (minHeap.size() > 1) {
+        Node *left = minHeap.top(); minHeap.pop();
+        Node *right = minHeap.top(); minHeap.pop();
+
+        Node *merged = new Node('\0', left->freq + right->freq);
+        merged->left = left;
+        merged->right = right;
+
+        minHeap.push(merged);
+    }
+
+    return minHeap.top();
+}
+
+// Generate Huffman codes
+void generateCodes(Node* root, string code) {
+    if (!root) return;
+
+    if (!root->left && !root->right) {
+        huffmanCodes[root->ch] = code;
+        reverseCodes[code] = root->ch;
+    }
+
+    generateCodes(root->left, code + "0");
+    generateCodes(root->right, code + "1");
+}
+
+// Compress file
+void compress(const string& inputFile, const string& compressedFile) {
+    ifstream in(inputFile);
+    ofstream out(compressedFile, ios::binary);
+
+    unordered_map<char, int> freq;
+    string text((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
+    for (char ch : text)
+        freq[ch]++;
+
+    Node* root = buildHuffmanTree(freq);
+    generateCodes(root, "");
+
+    // Write encoded bits
+    string encoded = "";
+    for (char ch : text)
+        encoded += huffmanCodes[ch];
+
+    // Store header: size + frequency table
+    int size = freq.size();
+    out.write(reinterpret_cast<char*>(&size), sizeof(int));
+    for (auto& pair : freq) {
+        out.put(pair.first);
+        out.write(reinterpret_cast<char*>(&pair.second), sizeof(int));
+    }
+
+    // Write encoded string as bytes
+    while (encoded.size() % 8 != 0)
+        encoded += "0"; // padding
+
+    for (size_t i = 0; i < encoded.size(); i += 8) {
+        bitset<8> bits(encoded.substr(i, 8));
+        char byte = bits.to_ulong();
+        out.put(byte);
+    }
+
+    in.close();
+    out.close();
+}
+
+// Decompress file
+void decompress(const string& compressedFile, const string& outputFile) {
+    ifstream in(compressedFile, ios::binary);
+    ofstream out(outputFile);
+
+    unordered_map<char, int> freq;
+    int size;
+    in.read(reinterpret_cast<char*>(&size), sizeof(int));
+    for (int i = 0; i < size; ++i) {
+        char ch;
+        int f;
+        in.get(ch);
+        in.read(reinterpret_cast<char*>(&f), sizeof(int));
+        freq[ch] = f;
+    }
+
+    Node* root = buildHuffmanTree(freq);
+    generateCodes(root, "");
+
+    string binaryStr = "", line;
+    char byte;
+    while (in.get(byte)) {
+        bitset<8> bits(byte);
+        binaryStr += bits.to_string();
+    }
+
+    Node* curr = root;
+    for (char bit : binaryStr) {
+        curr = (bit == '0') ? curr->left : curr->right;
+        if (!curr->left && !curr->right) {
+            out.put(curr->ch);
+            curr = root;
+        }
+    }
+
+    in.close();
+    out.close();
+}
+
+int main() {
+    string inputFile = "ab.txt";
+    string compressedFile = "compressed.bin";
+    string outputFile = "decompressed.txt";
+
+    compress(inputFile, compressedFile);
+    decompress(compressedFile, outputFile);
+
+    cout << "Original file size    : " << getFileSize(inputFile) << " bytes\n";
+    cout << "Compressed file size  : " << getFileSize(compressedFile) << " bytes\n";
+
+    return 0;
+}
